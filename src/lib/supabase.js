@@ -38,11 +38,13 @@ export const businessesApi = {
     return data;
   },
   create: async (business) => {
-    const { data, error } = await supabase
-      .from('businesses')
-      .insert(business)
-      .select()
-      .single();
+    const { data, error } = await supabase.rpc('create_business_with_owner', {
+      p_name: business.name,
+      p_phone_number: business.phone_number || null,
+      p_twilio_number: business.twilio_number || null,
+      p_cal_org_slug: business.cal_org_slug || null,
+      p_vapi_assistant_id: business.vapi_assistant_id || null
+    });
     if (error) throw error;
     return data;
   },
