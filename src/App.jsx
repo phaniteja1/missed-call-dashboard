@@ -1,13 +1,39 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
 import { supabase, callsApi, businessesApi, webhookEventsApi } from './lib/supabase';
 import './index.css';
+
+// Toasts
+function ToastStack({ toasts, onDismiss }) {
+  return (
+    <div className="toast-stack">
+      {toasts.map(toast => (
+        <div key={toast.id} className={`toast toast-${toast.type || 'info'}`}>
+          <span>{toast.message}</span>
+          <button className="toast-close" onClick={() => onDismiss(toast.id)}>×</button>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 // Header Component
 function Header({ session, onSignOut }) {
   const location = useLocation();
   const user = session?.user;
   const email = user?.email || user?.user_metadata?.email;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (!menuRef.current?.contains(event.target)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
   
   return (
     <header className="header">
@@ -25,15 +51,26 @@ function Header({ session, onSignOut }) {
       </nav>
       <div className="auth-status">
         {user ? (
-          <>
-            <div className="auth-who">
-              <span className="auth-label">Signed in as</span>
-              <span className="auth-value">{email || user.id}</span>
-            </div>
-            <button className="btn btn-secondary btn-sm" onClick={onSignOut}>
-              Sign Out
+          <div className="user-menu" ref={menuRef}>
+            <button className="user-trigger" onClick={() => setMenuOpen(!menuOpen)}>
+              <span className="user-avatar">{(email || user.id).slice(0, 1).toUpperCase()}</span>
+              <span className="user-email">{email || user.id}</span>
             </button>
-          </>
+            {menuOpen && (
+              <div className="user-dropdown">
+                <div className="user-dropdown-header">
+                  <div className="user-avatar lg">{(email || user.id).slice(0, 1).toUpperCase()}</div>
+                  <div>
+                    <div className="user-label">Signed in as</div>
+                    <div className="user-value">{email || user.id}</div>
+                  </div>
+                </div>
+                <button className="btn btn-secondary btn-sm full" onClick={onSignOut}>
+                  Sign Out
+                </button>
+              </div>
+            )}
+          </div>
         ) : (
           <span className="auth-label">Not signed in</span>
         )}
@@ -76,11 +113,45 @@ function formatDate(dateStr) {
   return date.toLocaleString();
 }
 
+function EmptyState({ icon, title, message }) {
+  return (
+    <div className="empty-state">
+      <div className="empty-icon">{icon}</div>
+      <div className="empty-title">{title}</div>
+      <div className="empty-message">{message}</div>
+    </div>
+  );
+}
+
+function TableSkeleton({ rows = 6, cols = 5 }) {
+  return (
+    <div className="table-skeleton">
+      {Array.from({ length: rows }).map((_, rowIndex) => (
+        <div
+          key={rowIndex}
+          className="skeleton-row"
+          style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}
+        >
+          {Array.from({ length: cols }).map((__, colIndex) => (
+            <div key={colIndex} className="skeleton-cell" />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // Calls Page
-function CallsPage() {
+function CallsPage({ onNotify }) {
   const [calls, setCalls] = useState([]);
+  const [businesses, setBusinesses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedCall, setSelectedCall] = useState(null);
+  const [filters, setFilters] = useState({
+    status: 'all',
+    businessId: 'all',
+    search: ''
+  });
   
   useEffect(() => {
     loadCalls();
@@ -88,16 +159,43 @@ function CallsPage() {
   
   async function loadCalls() {
     try {
-      const data = await callsApi.getAll(100);
-      setCalls(data);
+      const [callsData, businessesData] = await Promise.all([
+        callsApi.getAll(100),
+        businessesApi.getAll()
+      ]);
+      setCalls(callsData);
+      setBusinesses(businessesData);
     } catch (error) {
       console.error('Error loading calls:', error);
+      onNotify?.('Error loading calls', 'error');
     } finally {
       setLoading(false);
     }
   }
   
-  if (loading) return <div className="loading">Loading calls...</div>;
+  const filteredCalls = useMemo(() => {
+    return calls.filter(call => {
+      const matchesStatus = filters.status === 'all' || call.status === filters.status;
+      const matchesBusiness =
+        filters.businessId === 'all' || call.business_id === filters.businessId;
+      const matchesSearch =
+        filters.search.trim() === '' ||
+        call.caller_phone?.toLowerCase().includes(filters.search.toLowerCase()) ||
+        call.businesses?.name?.toLowerCase().includes(filters.search.toLowerCase());
+      return matchesStatus && matchesBusiness && matchesSearch;
+    });
+  }, [calls, filters]);
+
+  if (loading) {
+    return (
+      <div>
+        <h1 className="page-title">Recent Calls</h1>
+        <div className="card">
+          <TableSkeleton rows={8} cols={6} />
+        </div>
+      </div>
+    );
+  }
   
   return (
     <div>
@@ -105,46 +203,97 @@ function CallsPage() {
       
       <div className="card">
         <div className="card-header">
-          <span className="card-title">Call History ({calls.length})</span>
+          <span className="card-title">Call History ({filteredCalls.length})</span>
           <button className="btn btn-secondary btn-sm" onClick={loadCalls}>
             Refresh
           </button>
         </div>
-        
-        {calls.length === 0 ? (
-          <div className="empty-state">No calls yet</div>
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Business</th>
-                <th>Caller</th>
-                <th>Duration</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {calls.map(call => (
-                <tr key={call.id}>
-                  <td>{formatDate(call.started_at)}</td>
-                  <td>{call.businesses?.name || '-'}</td>
-                  <td>{call.caller_phone}</td>
-                  <td>{formatDuration(call.duration_seconds)}</td>
-                  <td><StatusBadge status={call.status} /></td>
-                  <td>
-                    <button 
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => setSelectedCall(call)}
-                    >
-                      View
-                    </button>
-                  </td>
-                </tr>
+
+        <div className="filter-bar">
+          <div className="filter-group">
+            <label className="filter-label">Status</label>
+            <select
+              className="form-input"
+              value={filters.status}
+              onChange={e => setFilters({ ...filters, status: e.target.value })}
+            >
+              <option value="all">All</option>
+              <option value="answered">Answered</option>
+              <option value="voicemail">Voicemail</option>
+              <option value="failed">Failed</option>
+              <option value="busy">Busy</option>
+              <option value="pending">Pending</option>
+              <option value="confirmed">Confirmed</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </div>
+          <div className="filter-group">
+            <label className="filter-label">Business</label>
+            <select
+              className="form-input"
+              value={filters.businessId}
+              onChange={e => setFilters({ ...filters, businessId: e.target.value })}
+            >
+              <option value="all">All</option>
+              {businesses.map(business => (
+                <option key={business.id} value={business.id}>
+                  {business.name}
+                </option>
               ))}
-            </tbody>
-          </table>
+            </select>
+          </div>
+          <div className="filter-group grow">
+            <label className="filter-label">Search</label>
+            <input
+              type="text"
+              className="form-input"
+              placeholder="Search by caller or business..."
+              value={filters.search}
+              onChange={e => setFilters({ ...filters, search: e.target.value })}
+            />
+          </div>
+        </div>
+        
+        {filteredCalls.length === 0 ? (
+          <EmptyState
+            icon="📞"
+            title="No calls yet"
+            message="Once calls start coming in, you’ll see them here."
+          />
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Business</th>
+                  <th>Caller</th>
+                  <th>Duration</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredCalls.map(call => (
+                  <tr key={call.id}>
+                    <td>{formatDate(call.started_at)}</td>
+                    <td>{call.businesses?.name || '-'}</td>
+                    <td>{call.caller_phone}</td>
+                    <td>{formatDuration(call.duration_seconds)}</td>
+                    <td><StatusBadge status={call.status} /></td>
+                    <td>
+                      <button 
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => setSelectedCall(call)}
+                      >
+                        View
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
       
@@ -220,11 +369,12 @@ function CallsPage() {
 }
 
 // Businesses Page
-function BusinessesPage() {
+function BusinessesPage({ onNotify }) {
   const [businesses, setBusinesses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingBusiness, setEditingBusiness] = useState(null);
+  const [search, setSearch] = useState('');
   const [formData, setFormData] = useState({
     name: '',
     phone_number: '',
@@ -243,6 +393,7 @@ function BusinessesPage() {
       setBusinesses(data);
     } catch (error) {
       console.error('Error loading businesses:', error);
+      onNotify?.('Error loading businesses', 'error');
     } finally {
       setLoading(false);
     }
@@ -277,14 +428,16 @@ function BusinessesPage() {
     try {
       if (editingBusiness) {
         await businessesApi.update(editingBusiness.id, formData);
+        onNotify?.('Business updated', 'success');
       } else {
         await businessesApi.create(formData);
+        onNotify?.('Business created', 'success');
       }
       setShowModal(false);
       loadBusinesses();
     } catch (error) {
       console.error('Error saving business:', error);
-      alert('Error saving business: ' + error.message);
+      onNotify?.(`Error saving business: ${error.message}`, 'error');
     }
   }
   
@@ -292,14 +445,31 @@ function BusinessesPage() {
     if (!confirm('Are you sure you want to delete this business?')) return;
     try {
       await businessesApi.delete(id);
+      onNotify?.('Business deleted', 'success');
       loadBusinesses();
     } catch (error) {
       console.error('Error deleting business:', error);
-      alert('Error deleting business: ' + error.message);
+      onNotify?.(`Error deleting business: ${error.message}`, 'error');
     }
   }
   
-  if (loading) return <div className="loading">Loading businesses...</div>;
+  const filteredBusinesses = useMemo(() => {
+    if (!search.trim()) return businesses;
+    return businesses.filter(business =>
+      business.name?.toLowerCase().includes(search.toLowerCase())
+    );
+  }, [businesses, search]);
+
+  if (loading) {
+    return (
+      <div>
+        <h1 className="page-title">Businesses</h1>
+        <div className="card">
+          <TableSkeleton rows={6} cols={6} />
+        </div>
+      </div>
+    );
+  }
   
   return (
     <div>
@@ -307,56 +477,73 @@ function BusinessesPage() {
       
       <div className="card">
         <div className="card-header">
-          <span className="card-title">Manage Businesses ({businesses.length})</span>
+          <span className="card-title">Manage Businesses ({filteredBusinesses.length})</span>
           <button className="btn btn-primary" onClick={openAddModal}>
             + Add Business
           </button>
         </div>
-        
-        {businesses.length === 0 ? (
-          <div className="empty-state">
-            No businesses yet. Add your first business to get started.
+
+        <div className="filter-bar">
+          <div className="filter-group grow">
+            <label className="filter-label">Search</label>
+            <input
+              type="text"
+              className="form-input"
+              placeholder="Search businesses..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
           </div>
+        </div>
+        
+        {filteredBusinesses.length === 0 ? (
+          <EmptyState
+            icon="🏢"
+            title="No businesses yet"
+            message="Add your first business to start tracking calls."
+          />
         ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Phone Number</th>
-                <th>Twilio Number</th>
-                <th>Cal.com Org</th>
-                <th>Created</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {businesses.map(business => (
-                <tr key={business.id}>
-                  <td><strong>{business.name}</strong></td>
-                  <td>{business.phone_number || '-'}</td>
-                  <td>{business.twilio_number || '-'}</td>
-                  <td>{business.cal_org_slug || '-'}</td>
-                  <td>{formatDate(business.created_at)}</td>
-                  <td>
-                    <div className="actions">
-                      <button 
-                        className="btn btn-secondary btn-sm"
-                        onClick={() => openEditModal(business)}
-                      >
-                        Edit
-                      </button>
-                      <button 
-                        className="btn btn-danger btn-sm"
-                        onClick={() => handleDelete(business.id)}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </td>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Phone Number</th>
+                  <th>Twilio Number</th>
+                  <th>Cal.com Org</th>
+                  <th>Created</th>
+                  <th>Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {filteredBusinesses.map(business => (
+                  <tr key={business.id}>
+                    <td><strong>{business.name}</strong></td>
+                    <td>{business.phone_number || '-'}</td>
+                    <td>{business.twilio_number || '-'}</td>
+                    <td>{business.cal_org_slug || '-'}</td>
+                    <td>{formatDate(business.created_at)}</td>
+                    <td>
+                      <div className="actions">
+                        <button 
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => openEditModal(business)}
+                        >
+                          Edit
+                        </button>
+                        <button 
+                          className="btn btn-danger btn-sm"
+                          onClick={() => handleDelete(business.id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
       
@@ -473,7 +660,16 @@ function DebugPage() {
     ));
   }
   
-  if (loading) return <div className="loading">Loading debug events...</div>;
+  if (loading) {
+    return (
+      <div>
+        <h1 className="page-title">Debug Panel</h1>
+        <div className="card">
+          <TableSkeleton rows={6} cols={4} />
+        </div>
+      </div>
+    );
+  }
   
   return (
     <div>
@@ -504,7 +700,11 @@ function DebugPage() {
         
         <div className="debug-panel">
           {events.length === 0 ? (
-            <div className="empty-state" style={{ color: '#888' }}>No webhook events yet</div>
+            <EmptyState
+              icon="🧩"
+              title="No webhook events"
+              message="Webhook activity will show here when events start firing."
+            />
           ) : (
             events.map(event => (
               <div key={event.id} className="debug-event">
@@ -606,7 +806,11 @@ function DashboardStats() {
           <Link to="/" className="btn btn-secondary btn-sm">View All</Link>
         </div>
         {recentCalls.length === 0 ? (
-          <div className="empty-state">No recent activity</div>
+          <EmptyState
+            icon="✨"
+            title="No recent activity"
+            message="When calls come in, they’ll show up here."
+          />
         ) : (
           <table className="table">
             <thead>
@@ -786,6 +990,7 @@ function AuthPage() {
 function App() {
   const [session, setSession] = useState(null);
   const [sessionReady, setSessionReady] = useState(false);
+  const [toasts, setToasts] = useState([]);
 
   useEffect(() => {
     let isMounted = true;
@@ -807,6 +1012,18 @@ function App() {
     await supabase.auth.signOut();
   }
 
+  function notify(message, type = 'info') {
+    const id = `${Date.now()}-${Math.random()}`;
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(toast => toast.id !== id));
+    }, 4000);
+  }
+
+  function dismissToast(id) {
+    setToasts(prev => prev.filter(toast => toast.id !== id));
+  }
+
   if (!sessionReady) {
     return <div className="loading">Loading session...</div>;
   }
@@ -826,11 +1043,12 @@ function App() {
         <main className="main">
           <Routes>
             <Route path="/" element={<HomePage />} />
-            <Route path="/calls" element={<CallsPage />} />
-            <Route path="/businesses" element={<BusinessesPage />} />
+            <Route path="/calls" element={<CallsPage onNotify={notify} />} />
+            <Route path="/businesses" element={<BusinessesPage onNotify={notify} />} />
             <Route path="/debug" element={<DebugPage />} />
           </Routes>
         </main>
+        <ToastStack toasts={toasts} onDismiss={dismissToast} />
       </div>
     </BrowserRouter>
   );
