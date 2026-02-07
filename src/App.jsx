@@ -87,6 +87,9 @@ function StatusBadge({ status }) {
     failed: 'badge-error',
     busy: 'badge-error',
     pending: 'badge-info',
+    queued: 'badge-info',
+    'in-progress': 'badge-warning',
+    completed: 'badge-success',
     confirmed: 'badge-success',
     cancelled: 'badge-error'
   };
@@ -100,7 +103,8 @@ function StatusBadge({ status }) {
 
 // Format Duration
 function formatDuration(seconds) {
-  if (!seconds) return '-';
+  if (seconds === null || seconds === undefined) return '-';
+  if (seconds === 0) return '0s';
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
   return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
@@ -111,6 +115,78 @@ function formatDate(dateStr) {
   if (!dateStr) return '-';
   const date = new Date(dateStr);
   return date.toLocaleString();
+}
+
+function getCallerPhone(call) {
+  return call.customer_phone || call.from_phone || call.caller_phone || '-';
+}
+
+function getCallStart(call) {
+  return call.started_at || call.metadata?.vapi_call?.createdAt || call.created_at || null;
+}
+
+function getCallEnd(call) {
+  return call.ended_at || call.metadata?.vapi_call?.updatedAt || call.updated_at || null;
+}
+
+function getCallDuration(call) {
+  if (typeof call.duration_seconds === 'number') return call.duration_seconds;
+  const start = getCallStart(call);
+  const end = getCallEnd(call);
+  if (!start || !end) return null;
+  const duration = new Date(end) - new Date(start);
+  if (Number.isNaN(duration) || duration < 0) return null;
+  return Math.round(duration / 1000);
+}
+
+function formatYesNo(value) {
+  if (value === null || value === undefined) return '-';
+  return value ? 'Yes' : 'No';
+}
+
+function shortId(value) {
+  if (!value) return '-';
+  if (value.length <= 10) return value;
+  return `${value.slice(0, 6)}…${value.slice(-4)}`;
+}
+
+function formatBusinessHours(hours) {
+  if (!hours) return '-';
+  const dayOrder = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+  const dayLabels = {
+    mon: 'Mon',
+    tue: 'Tue',
+    wed: 'Wed',
+    thu: 'Thu',
+    fri: 'Fri',
+    sat: 'Sat',
+    sun: 'Sun'
+  };
+  return dayOrder
+    .filter(day => hours[day])
+    .map(day => `${dayLabels[day]} ${hours[day].start}-${hours[day].end}`)
+    .join(', ');
+}
+
+function getBusinessHoursEntries(hours) {
+  if (!hours) return [];
+  const dayOrder = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+  const dayLabels = {
+    mon: 'Mon',
+    tue: 'Tue',
+    wed: 'Wed',
+    thu: 'Thu',
+    fri: 'Fri',
+    sat: 'Sat',
+    sun: 'Sun'
+  };
+  return dayOrder
+    .filter(day => hours[day])
+    .map(day => ({
+      label: dayLabels[day],
+      start: hours[day].start,
+      end: hours[day].end
+    }));
 }
 
 function EmptyState({ icon, title, message }) {
@@ -138,6 +214,17 @@ function TableSkeleton({ rows = 6, cols = 5 }) {
         </div>
       ))}
     </div>
+  );
+}
+
+function BooleanPill({ value, trueLabel = 'Yes', falseLabel = 'No' }) {
+  if (value === null || value === undefined) {
+    return <span className="pill pill-neutral">-</span>;
+  }
+  return (
+    <span className={`pill ${value ? 'pill-success' : 'pill-warning'}`}>
+      {value ? trueLabel : falseLabel}
+    </span>
   );
 }
 
@@ -180,18 +267,34 @@ function CallsPage({ onNotify }) {
         filters.businessId === 'all' || call.business_id === filters.businessId;
       const matchesSearch =
         filters.search.trim() === '' ||
-        call.caller_phone?.toLowerCase().includes(filters.search.toLowerCase()) ||
-        call.businesses?.name?.toLowerCase().includes(filters.search.toLowerCase());
+        getCallerPhone(call).toLowerCase().includes(filters.search.toLowerCase()) ||
+        call.businesses?.name?.toLowerCase().includes(filters.search.toLowerCase()) ||
+        call.intent?.toLowerCase().includes(filters.search.toLowerCase()) ||
+        call.ended_reason?.toLowerCase().includes(filters.search.toLowerCase()) ||
+        call.vapi_call_id?.toLowerCase().includes(filters.search.toLowerCase());
       return matchesStatus && matchesBusiness && matchesSearch;
     });
   }, [calls, filters]);
+
+  const callStats = useMemo(() => {
+    const total = filteredCalls.length;
+    const completed = filteredCalls.filter(call => call.status === 'completed').length;
+    const missed = filteredCalls.filter(call => call.missed).length;
+    const escalations = filteredCalls.filter(call => call.escalation_required).length;
+    const durations = filteredCalls
+      .map(call => call.duration_seconds)
+      .filter(value => typeof value === 'number' && value > 0);
+    const avgDuration =
+      durations.length > 0 ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length) : 0;
+    return { total, completed, missed, escalations, avgDuration };
+  }, [filteredCalls]);
 
   if (loading) {
     return (
       <div>
         <h1 className="page-title">Recent Calls</h1>
         <div className="card">
-          <TableSkeleton rows={8} cols={6} />
+          <TableSkeleton rows={8} cols={10} />
         </div>
       </div>
     );
@@ -200,6 +303,29 @@ function CallsPage({ onNotify }) {
   return (
     <div>
       <h1 className="page-title">Recent Calls</h1>
+
+      <div className="stats-grid">
+        <div className="stat-card">
+          <div className="stat-label">Total Calls</div>
+          <div className="stat-value">{callStats.total}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Completed</div>
+          <div className="stat-value">{callStats.completed}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Missed</div>
+          <div className="stat-value">{callStats.missed}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Escalations</div>
+          <div className="stat-value">{callStats.escalations}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Avg Duration</div>
+          <div className="stat-value">{formatDuration(callStats.avgDuration)}</div>
+        </div>
+      </div>
       
       <div className="card">
         <div className="card-header">
@@ -223,6 +349,9 @@ function CallsPage({ onNotify }) {
               <option value="failed">Failed</option>
               <option value="busy">Busy</option>
               <option value="pending">Pending</option>
+              <option value="queued">Queued</option>
+              <option value="in-progress">In Progress</option>
+              <option value="completed">Completed</option>
               <option value="confirmed">Confirmed</option>
               <option value="cancelled">Cancelled</option>
             </select>
@@ -265,22 +394,37 @@ function CallsPage({ onNotify }) {
             <table className="table">
               <thead>
                 <tr>
-                  <th>Date</th>
+                  <th>Started</th>
                   <th>Business</th>
                   <th>Caller</th>
-                  <th>Duration</th>
+                  <th>Direction</th>
+                  <th>Intent</th>
                   <th>Status</th>
+                  <th>AI</th>
+                  <th>Escalation</th>
+                  <th>Duration</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredCalls.map(call => (
                   <tr key={call.id}>
-                    <td>{formatDate(call.started_at)}</td>
+                    <td>{formatDate(getCallStart(call))}</td>
                     <td>{call.businesses?.name || '-'}</td>
-                    <td>{call.caller_phone}</td>
-                    <td>{formatDuration(call.duration_seconds)}</td>
-                    <td><StatusBadge status={call.status} /></td>
+                    <td>{getCallerPhone(call)}</td>
+                    <td className="cell-muted">{call.direction || '-'}</td>
+                    <td className="cell-muted">{call.intent || '-'}</td>
+                    <td>
+                      <div className="status-stack">
+                        <StatusBadge status={call.status || 'unknown'} />
+                        {call.ended_reason && (
+                          <span className="cell-subtext">{call.ended_reason}</span>
+                        )}
+                      </div>
+                    </td>
+                    <td><BooleanPill value={call.ai_handled} trueLabel="Handled" falseLabel="No" /></td>
+                    <td><BooleanPill value={call.escalation_required} trueLabel="Yes" falseLabel="No" /></td>
+                    <td>{formatDuration(getCallDuration(call))}</td>
                     <td>
                       <button 
                         className="btn btn-secondary btn-sm"
@@ -306,51 +450,147 @@ function CallsPage({ onNotify }) {
               <button className="modal-close" onClick={() => setSelectedCall(null)}>×</button>
             </div>
             
-            <div className="grid-2" style={{ marginBottom: '1rem' }}>
+            <div className="detail-header">
               <div>
-                <strong>Business:</strong> {selectedCall.businesses?.name || '-'}
+                <div className="detail-title">{selectedCall.businesses?.name || '-'}</div>
+                <div className="detail-subtitle">{getCallerPhone(selectedCall)}</div>
               </div>
-              <div>
-                <strong>Caller:</strong> {selectedCall.caller_phone}
-              </div>
-              <div>
-                <strong>Started:</strong> {formatDate(selectedCall.started_at)}
-              </div>
-              <div>
-                <strong>Duration:</strong> {formatDuration(selectedCall.duration_seconds)}
-              </div>
-              <div>
-                <strong>Status:</strong> <StatusBadge status={selectedCall.status} />
-              </div>
-              <div>
-                <strong>Direction:</strong> {selectedCall.direction}
+              <div className="detail-chips">
+                <StatusBadge status={selectedCall.status || 'unknown'} />
+                {selectedCall.ended_reason && (
+                  <span className="chip">{selectedCall.ended_reason}</span>
+                )}
               </div>
             </div>
-            
-            {selectedCall.transcript_text && (
-              <div>
-                <strong>Transcript:</strong>
-                <div className="transcript" style={{ marginTop: '0.5rem' }}>
-                  {selectedCall.transcript_text}
+
+            <div className="detail-grid">
+              <div className="detail-item">
+                <span className="detail-label">Started</span>
+                <span className="detail-value">{formatDate(getCallStart(selectedCall))}</span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">Ended</span>
+                <span className="detail-value">{formatDate(getCallEnd(selectedCall))}</span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">Duration</span>
+                <span className="detail-value">{formatDuration(getCallDuration(selectedCall))}</span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">Direction</span>
+                <span className="detail-value">{selectedCall.direction || '-'}</span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">Intent</span>
+                <span className="detail-value">{selectedCall.intent || '-'}</span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">Sentiment</span>
+                <span className="detail-value">{selectedCall.sentiment || '-'}</span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">Missed</span>
+                <span className="detail-value">{formatYesNo(selectedCall.missed)}</span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">AI Handled</span>
+                <span className="detail-value">{formatYesNo(selectedCall.ai_handled)}</span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">Escalation Required</span>
+                <span className="detail-value">{formatYesNo(selectedCall.escalation_required)}</span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">From</span>
+                <span className="detail-value">{selectedCall.from_phone || '-'}</span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">To</span>
+                <span className="detail-value">{selectedCall.to_phone || '-'}</span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">VAPI Call ID</span>
+                <span className="detail-value" title={selectedCall.vapi_call_id}>
+                  {shortId(selectedCall.vapi_call_id)}
+                </span>
+              </div>
+            </div>
+
+            {selectedCall.summary && (
+              <div className="detail-section">
+                <div className="detail-section-title">Summary</div>
+                <div className="detail-text">{selectedCall.summary}</div>
+              </div>
+            )}
+
+            {(selectedCall.full_transcript || selectedCall.transcript_text) && (
+              <div className="detail-section">
+                <div className="detail-section-title">Transcript</div>
+                <div className="transcript">
+                  {selectedCall.full_transcript || selectedCall.transcript_text}
                 </div>
               </div>
             )}
             
             {selectedCall.recording_url && (
-              <div style={{ marginTop: '1rem' }}>
-                <strong>Recording:</strong>
-                <div style={{ marginTop: '0.5rem' }}>
-                  <audio controls src={selectedCall.recording_url} style={{ width: '100%' }}>
-                    Your browser does not support audio playback.
-                  </audio>
+              <div className="detail-section">
+                <div className="detail-section-title">Recording</div>
+                <audio controls src={selectedCall.recording_url} style={{ width: '100%' }}>
+                  Your browser does not support audio playback.
+                </audio>
+              </div>
+            )}
+
+            {selectedCall.metadata?.vapi_call && (
+              <div className="detail-section">
+                <div className="detail-section-title">Call Meta</div>
+                <div className="detail-grid">
+                  <div className="detail-item">
+                    <span className="detail-label">Provider</span>
+                    <span className="detail-value">
+                      {selectedCall.metadata?.vapi_call?.phoneCallProvider ||
+                        selectedCall.metadata?.vapi_call?.transport?.provider ||
+                        '-'}
+                    </span>
+                  </div>
+                  <div className="detail-item">
+                    <span className="detail-label">Cost</span>
+                    <span className="detail-value">
+                      {selectedCall.metadata?.vapi_call?.cost ?? '-'}
+                    </span>
+                  </div>
+                  <div className="detail-item">
+                    <span className="detail-label">Twilio Call SID</span>
+                    <span className="detail-value" title={selectedCall.metadata?.vapi_call?.metadata?.twilioCallSid}>
+                      {shortId(selectedCall.metadata?.vapi_call?.metadata?.twilioCallSid)}
+                    </span>
+                  </div>
+                  <div className="detail-item">
+                    <span className="detail-label">Twilio Number</span>
+                    <span className="detail-value">
+                      {selectedCall.metadata?.vapi_call?.metadata?.twilioNumber || '-'}
+                    </span>
+                  </div>
+                  <div className="detail-item">
+                    <span className="detail-label">Caller Location</span>
+                    <span className="detail-value">
+                      {selectedCall.metadata?.vapi_call?.metadata?.callerLocation || '-'}
+                    </span>
+                  </div>
+                  <div className="detail-item">
+                    <span className="detail-label">Created</span>
+                    <span className="detail-value">
+                      {formatDate(selectedCall.metadata?.vapi_call?.createdAt)}
+                    </span>
+                  </div>
                 </div>
               </div>
             )}
             
             {selectedCall.metadata && Object.keys(selectedCall.metadata).length > 0 && (
-              <div style={{ marginTop: '1rem' }}>
-                <strong>Metadata:</strong>
-                <pre className="debug-payload" style={{ marginTop: '0.5rem' }}>
+              <div className="detail-section">
+                <div className="detail-section-title">Raw Metadata</div>
+                <pre className="debug-payload">
                   {JSON.stringify(selectedCall.metadata, null, 2)}
                 </pre>
               </div>
@@ -374,6 +614,7 @@ function BusinessesPage({ onNotify }) {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingBusiness, setEditingBusiness] = useState(null);
+  const [selectedBusiness, setSelectedBusiness] = useState(null);
   const [search, setSearch] = useState('');
   const [formData, setFormData] = useState({
     name: '',
@@ -391,6 +632,13 @@ function BusinessesPage({ onNotify }) {
     try {
       const data = await businessesApi.getAll();
       setBusinesses(data);
+      setSelectedBusiness(prev => {
+        if (prev) {
+          const existing = data.find(item => item.id === prev.id);
+          return existing || data[0] || null;
+        }
+        return data[0] || null;
+      });
     } catch (error) {
       console.error('Error loading businesses:', error);
       onNotify?.('Error loading businesses', 'error');
@@ -465,7 +713,7 @@ function BusinessesPage({ onNotify }) {
       <div>
         <h1 className="page-title">Businesses</h1>
         <div className="card">
-          <TableSkeleton rows={6} cols={6} />
+          <TableSkeleton rows={6} cols={9} />
         </div>
       </div>
     );
@@ -474,6 +722,82 @@ function BusinessesPage({ onNotify }) {
   return (
     <div>
       <h1 className="page-title">Businesses</h1>
+
+      {selectedBusiness && (
+        <div className="card profile-card">
+          <div className="card-header">
+            <span className="card-title">Business Profile</span>
+            <div className="profile-actions">
+              <span className={`pill ${selectedBusiness.active ? 'pill-success' : 'pill-warning'}`}>
+                {selectedBusiness.active ? 'Active' : 'Inactive'}
+              </span>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => openEditModal(selectedBusiness)}
+              >
+                Edit Business
+              </button>
+            </div>
+          </div>
+          <div className="profile-grid">
+            <div>
+              <div className="profile-label">Name</div>
+              <div className="profile-value">{selectedBusiness.name}</div>
+            </div>
+            <div>
+              <div className="profile-label">Email</div>
+              <div className="profile-value">{selectedBusiness.email || '-'}</div>
+            </div>
+            <div>
+              <div className="profile-label">Timezone</div>
+              <div className="profile-value">{selectedBusiness.timezone || '-'}</div>
+            </div>
+            <div>
+              <div className="profile-label">Phone Number</div>
+              <div className="profile-value">{selectedBusiness.phone_number || '-'}</div>
+            </div>
+            <div>
+              <div className="profile-label">Twilio Number</div>
+              <div className="profile-value">{selectedBusiness.twilio_number || '-'}</div>
+            </div>
+            <div>
+              <div className="profile-label">Cal.com Org</div>
+              <div className="profile-value">{selectedBusiness.cal_org_slug || '-'}</div>
+            </div>
+            <div>
+              <div className="profile-label">VAPI Assistant</div>
+              <div className="profile-value" title={selectedBusiness.vapi_assistant_id || ''}>
+                {shortId(selectedBusiness.vapi_assistant_id)}
+              </div>
+            </div>
+            <div>
+              <div className="profile-label">VAPI Phone</div>
+              <div className="profile-value" title={selectedBusiness.vapi_phone_number_id || ''}>
+                {shortId(selectedBusiness.vapi_phone_number_id)}
+              </div>
+            </div>
+            <div>
+              <div className="profile-label">Created</div>
+              <div className="profile-value">{formatDate(selectedBusiness.created_at)}</div>
+            </div>
+          </div>
+          <div className="profile-hours">
+            <div className="profile-label">Business Hours</div>
+            <div className="hours-grid">
+              {getBusinessHoursEntries(selectedBusiness.business_hours).length === 0 ? (
+                <span className="cell-muted">No hours configured</span>
+              ) : (
+                getBusinessHoursEntries(selectedBusiness.business_hours).map(entry => (
+                  <div key={entry.label} className="hours-row">
+                    <span className="hours-day">{entry.label}</span>
+                    <span className="hours-time">{entry.start} - {entry.end}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       
       <div className="card">
         <div className="card-header">
@@ -508,9 +832,12 @@ function BusinessesPage({ onNotify }) {
               <thead>
                 <tr>
                   <th>Name</th>
-                  <th>Phone Number</th>
-                  <th>Twilio Number</th>
-                  <th>Cal.com Org</th>
+                  <th>Email</th>
+                  <th>Active</th>
+                  <th>Timezone</th>
+                  <th>Hours</th>
+                  <th>Assistant</th>
+                  <th>Phone ID</th>
                   <th>Created</th>
                   <th>Actions</th>
                 </tr>
@@ -518,13 +845,29 @@ function BusinessesPage({ onNotify }) {
               <tbody>
                 {filteredBusinesses.map(business => (
                   <tr key={business.id}>
-                    <td><strong>{business.name}</strong></td>
-                    <td>{business.phone_number || '-'}</td>
-                    <td>{business.twilio_number || '-'}</td>
-                    <td>{business.cal_org_slug || '-'}</td>
+                    <td>
+                      <button
+                        className="link-button"
+                        onClick={() => setSelectedBusiness(business)}
+                      >
+                        {business.name}
+                      </button>
+                    </td>
+                    <td>{business.email || '-'}</td>
+                    <td><BooleanPill value={business.active} trueLabel="Active" falseLabel="Inactive" /></td>
+                    <td>{business.timezone || '-'}</td>
+                    <td className="cell-muted">{formatBusinessHours(business.business_hours)}</td>
+                    <td title={business.vapi_assistant_id || ''}>{shortId(business.vapi_assistant_id)}</td>
+                    <td title={business.vapi_phone_number_id || ''}>{shortId(business.vapi_phone_number_id)}</td>
                     <td>{formatDate(business.created_at)}</td>
                     <td>
                       <div className="actions">
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => setSelectedBusiness(business)}
+                        >
+                          View
+                        </button>
                         <button 
                           className="btn btn-secondary btn-sm"
                           onClick={() => openEditModal(business)}
@@ -752,7 +1095,15 @@ function DebugPage() {
 
 // Dashboard Stats Component
 function DashboardStats() {
-  const [stats, setStats] = useState({ calls: 0, businesses: 0, bookings: 0 });
+  const [stats, setStats] = useState({
+    calls: 0,
+    businesses: 0,
+    today: 0,
+    completed: 0,
+    missed: 0,
+    escalations: 0,
+    avgDuration: 0
+  });
   const [recentCalls, setRecentCalls] = useState([]);
   
   useEffect(() => {
@@ -764,15 +1115,30 @@ function DashboardStats() {
         ]);
         
         const today = new Date();
-        const todayCalls = callsData.filter(c => {
-          const callDate = new Date(c.started_at);
+        const todayCalls = callsData.filter(call => {
+          const start = getCallStart(call);
+          if (!start) return false;
+          const callDate = new Date(start);
           return callDate.toDateString() === today.toDateString();
         });
+
+        const completedCalls = callsData.filter(call => call.status === 'completed').length;
+        const missedCalls = callsData.filter(call => call.missed).length;
+        const escalationCalls = callsData.filter(call => call.escalation_required).length;
+        const durations = callsData
+          .map(call => getCallDuration(call))
+          .filter(value => typeof value === 'number' && value > 0);
+        const avgDuration =
+          durations.length > 0 ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length) : 0;
         
         setStats({
           calls: callsData.length,
           businesses: businessesData.length,
-          today: todayCalls.length
+          today: todayCalls.length,
+          completed: completedCalls,
+          missed: missedCalls,
+          escalations: escalationCalls,
+          avgDuration
         });
         setRecentCalls(callsData.slice(0, 5));
       } catch (error) {
@@ -793,6 +1159,22 @@ function DashboardStats() {
         <div className="stat-card">
           <div className="stat-label">Today's Calls</div>
           <div className="stat-value">{stats.today}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Completed</div>
+          <div className="stat-value">{stats.completed}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Missed</div>
+          <div className="stat-value">{stats.missed}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Escalations</div>
+          <div className="stat-value">{stats.escalations}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Avg Duration</div>
+          <div className="stat-value">{formatDuration(stats.avgDuration)}</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Businesses</div>
@@ -824,10 +1206,10 @@ function DashboardStats() {
             <tbody>
               {recentCalls.map(call => (
                 <tr key={call.id}>
-                  <td>{formatDate(call.started_at)}</td>
+                  <td>{formatDate(getCallStart(call))}</td>
                   <td>{call.businesses?.name || '-'}</td>
-                  <td>{call.caller_phone}</td>
-                  <td><StatusBadge status={call.status} /></td>
+                  <td>{getCallerPhone(call)}</td>
+                  <td><StatusBadge status={call.status || 'unknown'} /></td>
                 </tr>
               ))}
             </tbody>
