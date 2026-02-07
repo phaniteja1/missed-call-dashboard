@@ -4,8 +4,10 @@ import { supabase, callsApi, businessesApi, webhookEventsApi } from './lib/supab
 import './index.css';
 
 // Header Component
-function Header() {
+function Header({ session, onSignOut }) {
   const location = useLocation();
+  const user = session?.user;
+  const email = user?.email || user?.user_metadata?.email;
   
   return (
     <header className="header">
@@ -21,6 +23,21 @@ function Header() {
           Debug
         </Link>
       </nav>
+      <div className="auth-status">
+        {user ? (
+          <>
+            <div className="auth-who">
+              <span className="auth-label">Signed in as</span>
+              <span className="auth-value">{email || user.id}</span>
+            </div>
+            <button className="btn btn-secondary btn-sm" onClick={onSignOut}>
+              Sign Out
+            </button>
+          </>
+        ) : (
+          <span className="auth-label">Not signed in</span>
+        )}
+      </div>
     </header>
   );
 }
@@ -627,12 +644,185 @@ function HomePage() {
   );
 }
 
+// Auth Page
+function AuthPage() {
+  const [mode, setMode] = useState('password');
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
+  const [form, setForm] = useState({
+    email: '',
+    password: ''
+  });
+
+  async function handlePasswordAuth(e) {
+    e.preventDefault();
+    setMessage('');
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: form.email,
+        password: form.password
+      });
+      if (error) throw error;
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleMagicLink(e) {
+    e.preventDefault();
+    setMessage('');
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        email: form.email,
+        options: { emailRedirectTo: window.location.origin }
+      });
+      if (error) throw error;
+      setMessage('Magic link sent. Check your email to finish signing in.');
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSignUp(e) {
+    e.preventDefault();
+    setMessage('');
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.signUp({
+        email: form.email,
+        password: form.password,
+        options: { emailRedirectTo: window.location.origin }
+      });
+      if (error) throw error;
+      setMessage('Check your email to confirm your account.');
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="auth-page">
+      <div className="auth-card">
+        <div className="auth-header">
+          <h1 className="auth-title">Sign in to Missed Call Admin</h1>
+          <p className="auth-subtitle">Use email/password or a magic link.</p>
+        </div>
+
+        <div className="auth-tabs">
+          <button
+            className={`auth-tab ${mode === 'password' ? 'active' : ''}`}
+            onClick={() => setMode('password')}
+          >
+            Email + Password
+          </button>
+          <button
+            className={`auth-tab ${mode === 'magic' ? 'active' : ''}`}
+            onClick={() => setMode('magic')}
+          >
+            Magic Link
+          </button>
+        </div>
+
+        <form onSubmit={mode === 'magic' ? handleMagicLink : handlePasswordAuth}>
+          <div className="form-group">
+            <label className="form-label">Email</label>
+            <input
+              type="email"
+              className="form-input"
+              value={form.email}
+              onChange={e => setForm({ ...form, email: e.target.value })}
+              placeholder="you@company.com"
+              required
+            />
+          </div>
+
+          {mode === 'password' && (
+            <div className="form-group">
+              <label className="form-label">Password</label>
+              <input
+                type="password"
+                className="form-input"
+                value={form.password}
+                onChange={e => setForm({ ...form, password: e.target.value })}
+                placeholder="••••••••"
+                required
+              />
+            </div>
+          )}
+
+          {message && <div className="auth-message">{message}</div>}
+
+          <div className="auth-actions">
+            {mode === 'password' ? (
+              <>
+                <button className="btn btn-primary" type="submit" disabled={loading}>
+                  {loading ? 'Signing in...' : 'Sign In'}
+                </button>
+                <button className="btn btn-secondary" onClick={handleSignUp} disabled={loading}>
+                  {loading ? 'Working...' : 'Create Account'}
+                </button>
+              </>
+            ) : (
+              <button className="btn btn-primary" type="submit" disabled={loading}>
+                {loading ? 'Sending...' : 'Send Magic Link'}
+              </button>
+            )}
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 // App Component
 function App() {
+  const [session, setSession] = useState(null);
+  const [sessionReady, setSessionReady] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!isMounted) return;
+      setSession(data.session ?? null);
+      setSessionReady(true);
+    });
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+    });
+    return () => {
+      isMounted = false;
+      subscription?.subscription?.unsubscribe();
+    };
+  }, []);
+
+  async function handleSignOut() {
+    await supabase.auth.signOut();
+  }
+
+  if (!sessionReady) {
+    return <div className="loading">Loading session...</div>;
+  }
+
+  if (!session) {
+    return (
+      <div className="app">
+        <AuthPage />
+      </div>
+    );
+  }
+
   return (
     <BrowserRouter>
       <div className="app">
-        <Header />
+        <Header session={session} onSignOut={handleSignOut} />
         <main className="main">
           <Routes>
             <Route path="/" element={<HomePage />} />
