@@ -189,6 +189,51 @@ function getBusinessHoursEntries(hours) {
     }));
 }
 
+const BUSINESS_HOUR_DAYS = [
+  { key: 'mon', label: 'Mon' },
+  { key: 'tue', label: 'Tue' },
+  { key: 'wed', label: 'Wed' },
+  { key: 'thu', label: 'Thu' },
+  { key: 'fri', label: 'Fri' },
+  { key: 'sat', label: 'Sat' },
+  { key: 'sun', label: 'Sun' }
+];
+
+function getDefaultBusinessHours() {
+  return BUSINESS_HOUR_DAYS.reduce((acc, day) => {
+    acc[day.key] = { active: false, start: '09:00', end: '17:00' };
+    return acc;
+  }, {});
+}
+
+function normalizeBusinessHours(hours) {
+  const normalized = getDefaultBusinessHours();
+  if (!hours) return normalized;
+  BUSINESS_HOUR_DAYS.forEach(day => {
+    if (hours[day.key]) {
+      normalized[day.key] = {
+        active: true,
+        start: hours[day.key].start || '09:00',
+        end: hours[day.key].end || '17:00'
+      };
+    }
+  });
+  return normalized;
+}
+
+function serializeBusinessHours(hours) {
+  const output = {};
+  BUSINESS_HOUR_DAYS.forEach(day => {
+    if (hours[day.key]?.active) {
+      output[day.key] = {
+        start: hours[day.key].start,
+        end: hours[day.key].end
+      };
+    }
+  });
+  return Object.keys(output).length ? output : null;
+}
+
 function EmptyState({ icon, title, message }) {
   return (
     <div className="empty-state">
@@ -624,7 +669,7 @@ function BusinessesPage({ onNotify }) {
     twilio_number: '',
     cal_org_slug: '',
     vapi_assistant_id: '',
-    business_hours_json: ''
+    business_hours: getDefaultBusinessHours()
   });
   
   useEffect(() => {
@@ -660,7 +705,7 @@ function BusinessesPage({ onNotify }) {
       twilio_number: '',
       cal_org_slug: '',
       vapi_assistant_id: '',
-      business_hours_json: ''
+      business_hours: getDefaultBusinessHours()
     });
     setShowModal(true);
   }
@@ -675,9 +720,7 @@ function BusinessesPage({ onNotify }) {
       twilio_number: business.twilio_number || '',
       cal_org_slug: business.cal_org_slug || '',
       vapi_assistant_id: business.vapi_assistant_id || '',
-      business_hours_json: business.business_hours
-        ? JSON.stringify(business.business_hours, null, 2)
-        : ''
+      business_hours: normalizeBusinessHours(business.business_hours)
     });
     setShowModal(true);
   }
@@ -685,14 +728,15 @@ function BusinessesPage({ onNotify }) {
   async function handleSubmit(e) {
     e.preventDefault();
     try {
-      let businessHours = null;
-      if (formData.business_hours_json?.trim()) {
-        try {
-          businessHours = JSON.parse(formData.business_hours_json);
-        } catch (error) {
-          onNotify?.('Business hours must be valid JSON.', 'error');
-          return;
-        }
+      const businessHours = serializeBusinessHours(formData.business_hours);
+      const invalidDay = BUSINESS_HOUR_DAYS.find(day => {
+        const entry = formData.business_hours[day.key];
+        if (!entry?.active) return false;
+        return !entry.start || !entry.end;
+      });
+      if (invalidDay) {
+        onNotify?.(`Please set start/end for ${invalidDay.label}.`, 'error');
+        return;
       }
 
       const payload = {
@@ -1012,14 +1056,69 @@ function BusinessesPage({ onNotify }) {
               </div>
 
               <div className="form-group">
-                <label className="form-label">Business Hours (JSON)</label>
-                <textarea
-                  className="form-input form-textarea"
-                  value={formData.business_hours_json}
-                  onChange={e => setFormData({ ...formData, business_hours_json: e.target.value })}
-                  placeholder='{"mon":{"start":"09:00","end":"17:00"}}'
-                />
-                <div className="form-hint">Use `mon, tue, wed, thu, fri, sat, sun` keys.</div>
+                <label className="form-label">Business Hours</label>
+                <div className="hours-editor">
+                  {BUSINESS_HOUR_DAYS.map(day => (
+                    <div key={day.key} className="hours-row-editor">
+                      <label className="hours-toggle">
+                        <input
+                          type="checkbox"
+                          checked={formData.business_hours[day.key]?.active}
+                          onChange={e =>
+                            setFormData({
+                              ...formData,
+                              business_hours: {
+                                ...formData.business_hours,
+                                [day.key]: {
+                                  ...formData.business_hours[day.key],
+                                  active: e.target.checked
+                                }
+                              }
+                            })
+                          }
+                        />
+                        <span>{day.label}</span>
+                      </label>
+                      <input
+                        type="time"
+                        className="form-input hours-input"
+                        value={formData.business_hours[day.key]?.start}
+                        disabled={!formData.business_hours[day.key]?.active}
+                        onChange={e =>
+                          setFormData({
+                            ...formData,
+                            business_hours: {
+                              ...formData.business_hours,
+                              [day.key]: {
+                                ...formData.business_hours[day.key],
+                                start: e.target.value
+                              }
+                            }
+                          })
+                        }
+                      />
+                      <span className="hours-sep">to</span>
+                      <input
+                        type="time"
+                        className="form-input hours-input"
+                        value={formData.business_hours[day.key]?.end}
+                        disabled={!formData.business_hours[day.key]?.active}
+                        onChange={e =>
+                          setFormData({
+                            ...formData,
+                            business_hours: {
+                              ...formData.business_hours,
+                              [day.key]: {
+                                ...formData.business_hours[day.key],
+                                end: e.target.value
+                              }
+                            }
+                          })
+                        }
+                      />
+                    </div>
+                  ))}
+                </div>
               </div>
               
               <div className="modal-footer">

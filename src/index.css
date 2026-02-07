@@ -371,6 +371,41 @@ body {
   color: var(--text-secondary);
 }
 
+.hours-editor {
+  display: grid;
+  gap: 0.5rem;
+  background: rgba(15, 23, 42, 0.35);
+  border: 1px solid var(--border);
+  padding: 0.75rem;
+  border-radius: 12px;
+}
+
+.hours-row-editor {
+  display: grid;
+  grid-template-columns: 90px 1fr auto 1fr;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.hours-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.hours-input {
+  min-width: 120px;
+}
+
+.hours-sep {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
 .form-input:focus {
   outline: none;
   border-color: var(--primary);
@@ -985,5 +1020,10 @@ body {
   
   .grid-2 {
     grid-template-columns: 1fr;
+  }
+
+  .hours-row-editor {
+    grid-template-columns: 1fr;
+    gap: 0.35rem;
   }
 }
