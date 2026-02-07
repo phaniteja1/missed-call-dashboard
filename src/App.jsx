@@ -618,10 +618,13 @@ function BusinessesPage({ onNotify }) {
   const [search, setSearch] = useState('');
   const [formData, setFormData] = useState({
     name: '',
+    email: '',
+    timezone: '',
     phone_number: '',
     twilio_number: '',
     cal_org_slug: '',
-    vapi_assistant_id: ''
+    vapi_assistant_id: '',
+    business_hours_json: ''
   });
   
   useEffect(() => {
@@ -651,10 +654,13 @@ function BusinessesPage({ onNotify }) {
     setEditingBusiness(null);
     setFormData({
       name: '',
+      email: '',
+      timezone: '',
       phone_number: '',
       twilio_number: '',
       cal_org_slug: '',
-      vapi_assistant_id: ''
+      vapi_assistant_id: '',
+      business_hours_json: ''
     });
     setShowModal(true);
   }
@@ -663,10 +669,15 @@ function BusinessesPage({ onNotify }) {
     setEditingBusiness(business);
     setFormData({
       name: business.name,
+      email: business.email || '',
+      timezone: business.timezone || '',
       phone_number: business.phone_number || '',
       twilio_number: business.twilio_number || '',
       cal_org_slug: business.cal_org_slug || '',
-      vapi_assistant_id: business.vapi_assistant_id || ''
+      vapi_assistant_id: business.vapi_assistant_id || '',
+      business_hours_json: business.business_hours
+        ? JSON.stringify(business.business_hours, null, 2)
+        : ''
     });
     setShowModal(true);
   }
@@ -674,11 +685,32 @@ function BusinessesPage({ onNotify }) {
   async function handleSubmit(e) {
     e.preventDefault();
     try {
+      let businessHours = null;
+      if (formData.business_hours_json?.trim()) {
+        try {
+          businessHours = JSON.parse(formData.business_hours_json);
+        } catch (error) {
+          onNotify?.('Business hours must be valid JSON.', 'error');
+          return;
+        }
+      }
+
+      const payload = {
+        name: formData.name,
+        email: formData.email || null,
+        timezone: formData.timezone || null,
+        phone_number: formData.phone_number || null,
+        twilio_number: formData.twilio_number || null,
+        cal_org_slug: formData.cal_org_slug || null,
+        vapi_assistant_id: formData.vapi_assistant_id || null,
+        business_hours: businessHours
+      };
+
       if (editingBusiness) {
-        await businessesApi.update(editingBusiness.id, formData);
+        await businessesApi.update(editingBusiness.id, payload);
         onNotify?.('Business updated', 'success');
       } else {
-        await businessesApi.create(formData);
+        await businessesApi.create(payload);
         onNotify?.('Business created', 'success');
       }
       setShowModal(false);
@@ -912,6 +944,28 @@ function BusinessesPage({ onNotify }) {
                   required
                 />
               </div>
+
+              <div className="form-group">
+                <label className="form-label">Email</label>
+                <input
+                  type="email"
+                  className="form-input"
+                  value={formData.email}
+                  onChange={e => setFormData({ ...formData, email: e.target.value })}
+                  placeholder="owner@company.com"
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Timezone</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={formData.timezone}
+                  onChange={e => setFormData({ ...formData, timezone: e.target.value })}
+                  placeholder="America/New_York"
+                />
+              </div>
               
               <div className="form-group">
                 <label className="form-label">Phone Number (Forwarding)</label>
@@ -955,6 +1009,17 @@ function BusinessesPage({ onNotify }) {
                   onChange={e => setFormData({ ...formData, vapi_assistant_id: e.target.value })}
                   placeholder="uuid"
                 />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Business Hours (JSON)</label>
+                <textarea
+                  className="form-input form-textarea"
+                  value={formData.business_hours_json}
+                  onChange={e => setFormData({ ...formData, business_hours_json: e.target.value })}
+                  placeholder='{"mon":{"start":"09:00","end":"17:00"}}'
+                />
+                <div className="form-hint">Use `mon, tue, wed, thu, fri, sat, sun` keys.</div>
               </div>
               
               <div className="modal-footer">

@@ -359,6 +359,18 @@ body {
   color: var(--text);
 }
 
+.form-textarea {
+  min-height: 120px;
+  resize: vertical;
+  font-family: 'Monaco', 'Menlo', monospace;
+}
+
+.form-hint {
+  margin-top: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
 .form-input:focus {
   outline: none;
   border-color: var(--primary);
@@ -368,7 +380,7 @@ body {
 .table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 980px;
+  min-width: 1200px;
 }
 
 .table-wrap {

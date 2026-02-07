@@ -46,7 +46,25 @@ export const businessesApi = {
       p_vapi_assistant_id: business.vapi_assistant_id || null
     });
     if (error) throw error;
-    return data;
+
+    const extraUpdates = {};
+    if (business.email) extraUpdates.email = business.email;
+    if (business.timezone) extraUpdates.timezone = business.timezone;
+    if (business.business_hours) extraUpdates.business_hours = business.business_hours;
+
+    if (Object.keys(extraUpdates).length === 0) {
+      return data;
+    }
+
+    const { data: updated, error: updateError } = await supabase
+      .from('businesses')
+      .update(extraUpdates)
+      .eq('id', data.id)
+      .select()
+      .single();
+
+    if (updateError) throw updateError;
+    return updated;
   },
   update: async (id, updates) => {
     const { data, error } = await supabase
